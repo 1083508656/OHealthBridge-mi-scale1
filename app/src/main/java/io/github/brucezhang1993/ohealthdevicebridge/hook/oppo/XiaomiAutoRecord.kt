@@ -91,18 +91,10 @@ object XiaomiAutoRecord {
                 // the user steps off is dropped by the scale without sending anything.
                 handled = true
                 BridgeLog.i("AUTORECORD broadcast w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds}")
+                // The advertisement frame is the first visible number. Persisting is left to the
+                // GATT session that scanMac opens right after this: it streams the whole settling
+                // process and reports the final record, so writing here would double-record.
                 BodyFatMeasureHook.broadcastLive(ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toDouble())
-                // Debounce the write. Frames keep arriving while the user settles onto the scale,
-                // and recording the first one stores a half-step weight. Reset the timer on every
-                // frame and only persist after the value has been quiet for a moment.
-                main.removeCallbacks(pendingWrite)
-                pendingWrite = Runnable {
-                    Thread({
-                        val ok = OppoRecordWriter.write(cl, ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toFloat(), rec.timestampEpochSeconds)
-                        BridgeLog.i("AUTORECORD broadcast write ${if (ok) "OK" else "FAILED"}")
-                    }, "oh-mi-broadcast-write").start()
-                }
-                main.postDelayed(pendingWrite, 3_000)
             })
         } else {
             driver.scan(ctx, SCAN_TIMEOUT_MS, { device ->

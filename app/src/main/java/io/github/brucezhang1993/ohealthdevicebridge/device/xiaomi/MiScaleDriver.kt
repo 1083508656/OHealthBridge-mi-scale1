@@ -71,9 +71,14 @@ internal class MiScaleDriver(override val model: String) : HistoryDeviceDriver {
                         "w=${reading.record.weightKg} r=${reading.record.resistanceOhm} stable=${reading.stable}"
                 )
                 onBroadcast?.invoke(reading.record)
-                // Keep scanning until a stable frame arrives. Stopping on the first frame captured
-                // the weight mid-step, which is exactly the wrong number to record.
-                if (reading.stable && !finished) { finished = true; stop?.invoke() }
+                // Show the frame right away, then open a GATT link. The advertisement only carries
+                // the occasional settled frame, while the GATT notifications stream every
+                // intermediate value — that is what the measure page needs to show "settling".
+                if (!finished) {
+                    finished = true; stop?.invoke()
+                    BridgeLog.i("XIAOMI known-device hit ${BridgeLog.maskedMac(scan.device.address)}")
+                    onDevice(BridgeDevice(scan.device.address, label(), model))
+                }
             } else if (!finished) {
                 finished = true; stop?.invoke()
                 BridgeLog.i("XIAOMI known-device hit ${BridgeLog.maskedMac(scan.device.address)}")
