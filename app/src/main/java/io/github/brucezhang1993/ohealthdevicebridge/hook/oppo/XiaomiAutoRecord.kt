@@ -31,8 +31,13 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object XiaomiAutoRecord {
     private const val SCAN_TIMEOUT_MS = 20_000L
-    private const val COOLDOWN_MS = 60_000L
+    // Long enough to swallow duplicate frames of one weighing, short enough that the next
+    // stepping-on is not missed (the old 60s cooldown blocked back-to-back measurements).
+    private const val COOLDOWN_MS = 20_000L
     private val main = Handler(Looper.getMainLooper())
+
+    /** Debounced write for the broadcast path; replaced every time a newer frame arrives. */
+    @Volatile private var pendingWrite: Runnable = Runnable { }
 
     @Volatile private var running = false
 
@@ -80,6 +85,24 @@ object XiaomiAutoRecord {
                 measureOnce(cl, ctx, driver, device.mac)
             }, { BridgeLog.i("AUTORECORD no measurement this window") }, { e ->
                 BridgeLog.e("AUTORECORD scan error", e)
+            }, { rec ->
+                // The advertisement already carried a full record, so handle it right here. This
+                // is both faster (no GATT round-trip) and more reliable: a connection opened after
+                // the user steps off is dropped by the scale without sending anything.
+                handled = true
+                BridgeLog.i("AUTORECORD broadcast w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds}")
+                BodyFatMeasureHook.broadcastLive(ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toDouble())
+                // Debounce the write. Frames keep arriving while the user settles onto the scale,
+                // and recording the first one stores a half-step weight. Reset the timer on every
+                // frame and only persist after the value has been quiet for a moment.
+                main.removeCallbacks(pendingWrite)
+                pendingWrite = Runnable {
+                    Thread({
+                        val ok = OppoRecordWriter.write(cl, ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toFloat(), rec.timestampEpochSeconds)
+                        BridgeLog.i("AUTORECORD broadcast write ${if (ok) "OK" else "FAILED"}")
+                    }, "oh-mi-broadcast-write").start()
+                }
+                main.postDelayed(pendingWrite, 3_000)
             })
         } else {
             driver.scan(ctx, SCAN_TIMEOUT_MS, { device ->
@@ -101,8 +124,13 @@ object XiaomiAutoRecord {
         val profile = UserProfile(age = 30, male = true, targetKg = 75.0)
         driver.measure(ctx, mac, profile, { w ->
             BridgeLog.i("AUTORECORD live %.2f kg".format(w))
+            // Mirror the live reading into OPPO's measure page. It lives in the main process, so
+            // this has to travel as a broadcast instead of a direct call.
+            BodyFatMeasureHook.broadcastLive(ctx, w, 0.0)
         }, { rec ->
             BridgeLog.i("AUTORECORD final w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds}")
+            // Settle the measure page on the final reading (with impedance) as well.
+            BodyFatMeasureHook.broadcastLive(ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toDouble())
             // 6.10.14 wraps the body-fat store in Room, and Room aborts any DB write issued from
             // the main thread (RoomDatabase.assertNotMainThread). The BLE final callback runs on
             // the main looper, so the whole DB write must be pushed to a worker thread.

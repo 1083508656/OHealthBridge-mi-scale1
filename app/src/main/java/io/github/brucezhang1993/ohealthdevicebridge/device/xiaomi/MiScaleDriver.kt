@@ -42,13 +42,39 @@ internal class MiScaleDriver(override val model: String) : HistoryDeviceDriver {
         return { finished = true; stop?.invoke() }
     }
 
-    /** Target the MAC learned at bind time; still verifies the advertisement before accepting. */
-    fun scanMac(context: Context, mac: String, timeoutMs: Long, onDevice: (BridgeDevice) -> Unit, onTimeout: () -> Unit, onError: (Throwable) -> Unit): () -> Unit {
+    /**
+     * Target the MAC learned at bind time; still verifies the advertisement before accepting.
+     *
+     * The scale embeds the same 10/13-byte measurement record in its advertisement while someone
+     * stands on it. Reading it straight from the broadcast avoids opening a GATT connection — and
+     * a GATT connection is what breaks here: the scale drops the link after ~30s of silence, so a
+     * late connect misses the measurement entirely.
+     */
+    fun scanMac(
+        context: Context, mac: String, timeoutMs: Long,
+        onDevice: (BridgeDevice) -> Unit, onTimeout: () -> Unit, onError: (Throwable) -> Unit,
+        onBroadcast: ((MeasurementRecord) -> Unit)? = null,
+    ): () -> Unit {
         var finished = false
         var stop: (() -> Unit)? = null
         val service = XiaomiBleScan.uuid(transport.serviceShort)
-        stop = XiaomiBleScan().start(context, service, mac, timeoutMs, true, { scan, _ ->
-            if (!finished) {
+        stop = XiaomiBleScan().start(context, service, mac, timeoutMs, true, { scan, bytes ->
+            val reading = if (bytes.isNotEmpty()) {
+                MiScaleProtocol.parse(bytes, transport.bodyComposition, System.currentTimeMillis() / 1000)
+            } else null
+            // A scale that is merely woken up advertises a near-empty reading (a few hundred grams
+            // to ~3kg). Accepting it would burn the 60s write cooldown and hide the real
+            // measurement taken moments later, so anything under 10kg is treated as noise.
+            if (reading != null && reading.record.weightKg >= 10.0) {
+                BridgeLog.i(
+                    "XIAOMI broadcast ${BridgeLog.maskedMac(scan.device.address)} " +
+                        "w=${reading.record.weightKg} r=${reading.record.resistanceOhm} stable=${reading.stable}"
+                )
+                onBroadcast?.invoke(reading.record)
+                // Keep scanning until a stable frame arrives. Stopping on the first frame captured
+                // the weight mid-step, which is exactly the wrong number to record.
+                if (reading.stable && !finished) { finished = true; stop?.invoke() }
+            } else if (!finished) {
                 finished = true; stop?.invoke()
                 BridgeLog.i("XIAOMI known-device hit ${BridgeLog.maskedMac(scan.device.address)}")
                 onDevice(BridgeDevice(scan.device.address, label(), model))

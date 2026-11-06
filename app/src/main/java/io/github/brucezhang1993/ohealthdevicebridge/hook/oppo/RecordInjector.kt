@@ -43,6 +43,11 @@ object RecordInjector {
                         if (it is VirtualMachineError) throw it
                         BridgeLog.e("selectDevice hook failed", it as? Exception)
                     }
+                    // Mirror live readings into OPPO's own measure page (BodyFatMeasureActivity).
+                    runCatching { BodyFatMeasureHook.install(cl, ctx) }.onFailure {
+                        if (it is VirtualMachineError) throw it
+                        BridgeLog.e("measure hook failed", it as? Exception)
+                    }
                     val proc = runCatching { android.app.Application.getProcessName() }.getOrNull()
                     if (proc == "com.heytap.health:SportDaemonService") {
                         XiaomiAutoRecord.start(cl, ctx)

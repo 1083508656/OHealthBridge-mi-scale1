@@ -126,7 +126,11 @@ internal class MiScaleGattSession(
             }
         }
         records.forEach { reading ->
-            if (reading.removed || reading.record.weightKg <= 0) { pendingFinal = null; return@forEach }
+            if (reading.record.weightKg <= 0) { pendingFinal = null; return@forEach }
+            // The 0x80 flag bit means "deleted" only on the history stream. Live 0x2A9C frames from
+            // this firmware also carry it (e.g. flags=0xA6), and dropping those swallowed every
+            // live reading — the scale appeared to send nothing at all.
+            if (reading.removed && wasHistory) { pendingFinal = null; return@forEach }
             if (wasHistory) {
                 if (reading.stable && reading.dated && seen.add(reading.record.timestampEpochSeconds to reading.record.weightKg)) history(reading.record)
             } else if (mode == Mode.MEASURE) {
