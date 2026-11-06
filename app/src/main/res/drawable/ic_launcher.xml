@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Rounded background -->
+    <path
+        android:fillColor="#12343B"
+        android:pathData="M22,6 L86,6 A16,16 0 0 1 102,22 L102,86 A16,16 0 0 1 86,102 L22,102 A16,16 0 0 1 6,86 L6,22 A16,16 0 0 1 22,6 Z" />
+    <!-- Scale body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,34 L78,34 A10,10 0 0 1 88,44 L88,72 A10,10 0 0 1 78,82 L30,82 A10,10 0 0 1 20,72 L20,44 A10,10 0 0 1 30,34 Z" />
+    <!-- Display -->
+    <path
+        android:fillColor="#12343B"
+        android:pathData="M36,44 L72,44 A4,4 0 0 1 76,48 L76,58 A4,4 0 0 1 72,62 L36,62 A4,4 0 0 1 32,58 L32,48 A4,4 0 0 1 36,44 Z" />
+    <!-- Weight digits -->
+    <path
+        android:fillColor="#3DDBB4"
+        android:pathData="M39,49 L43,49 L43,57 L39,57 Z M46,49 L50,49 L50,57 L46,57 Z M53,49 L57,49 L57,57 L53,57 Z M60,49 L64,49 L64,57 L60,57 Z M67,49 L70,49 L70,57 L67,57 Z" />
+    <!-- Electrode hints -->
+    <path
+        android:fillColor="#9FE8D8"
+        android:pathData="M32,69 L46,69 L46,73 L32,73 Z M62,69 L76,69 L76,73 L62,73 Z" />
+</vector>

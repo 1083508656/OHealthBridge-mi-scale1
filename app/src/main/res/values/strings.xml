@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">小米体脂秤 · OPPO 健康桥接</string>
+    <string name="xposed_description">把小米体脂秤接入 OPPO 健康：配对识别、称重自动记录、体成分计算、按家庭成员归档。支持小米体脂秤一代/二代、小米体重秤与薄荷健康秤。</string>
+</resources>
