@@ -50,7 +50,16 @@ object OppoRecordWriter {
                 val store = cl.loadClass("com.heytap.databaseengineservice.store.business.BodyFatStore").getDeclaredConstructor().newInstance()
                 val m = store.javaClass.methods.first { it.name == "b" && it.parameterCount == 1 && List::class.java.isAssignableFrom(it.parameterTypes[0]) }
                 m.invoke(store, arrayListOf(normalized))
-            }.onFailure { BridgeLog.e("WRITE insert failed", it as? Exception) }.getOrNull()
+            }.onFailure {
+                BridgeLog.e("WRITE insert failed", it as? Exception)
+                // Reflection wraps the real failure in InvocationTargetException; unwrap it so the
+                // log shows the actual cause (6.10.14 changed some internal obfuscation names).
+                val cause = (it as? java.lang.reflect.InvocationTargetException)?.targetException ?: it.cause
+                if (cause != null) {
+                    BridgeLog.e("WRITE insert cause=${cause.javaClass.name}: ${cause.message}")
+                    cause.stackTrace.take(12).forEach { f -> BridgeLog.e("  at $f") }
+                }
+            }.getOrNull()
 
             BridgeLog.i("WRITE insert result=$inserted")
             inserted != null

@@ -103,8 +103,13 @@ object XiaomiAutoRecord {
             BridgeLog.i("AUTORECORD live %.2f kg".format(w))
         }, { rec ->
             BridgeLog.i("AUTORECORD final w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds}")
-            val ok = OppoRecordWriter.write(cl, ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toFloat(), rec.timestampEpochSeconds)
-            BridgeLog.i("AUTORECORD write ${if (ok) "OK" else "FAILED"}")
+            // 6.10.14 wraps the body-fat store in Room, and Room aborts any DB write issued from
+            // the main thread (RoomDatabase.assertNotMainThread). The BLE final callback runs on
+            // the main looper, so the whole DB write must be pushed to a worker thread.
+            Thread({
+                val ok = OppoRecordWriter.write(cl, ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toFloat(), rec.timestampEpochSeconds)
+                BridgeLog.i("AUTORECORD write ${if (ok) "OK" else "FAILED"}")
+            }, "oh-mi-write").start()
             driver.disconnect(mac)
         }, { }, { e ->
             BridgeLog.e("AUTORECORD measure error", e)
