@@ -48,11 +48,6 @@ object RecordInjector {
                         if (it is VirtualMachineError) throw it
                         BridgeLog.e("measure hook failed", it as? Exception)
                     }
-                    // Keep the account owner first so a weighing is compared against the right member.
-                    runCatching { FamilyOrderHook.install(cl) }.onFailure {
-                        if (it is VirtualMachineError) throw it
-                        BridgeLog.e("family order hook failed", it as? Exception)
-                    }
                     val proc = runCatching { android.app.Application.getProcessName() }.getOrNull()
                     if (proc == "com.heytap.health:SportDaemonService") {
                         XiaomiAutoRecord.start(cl, ctx)
