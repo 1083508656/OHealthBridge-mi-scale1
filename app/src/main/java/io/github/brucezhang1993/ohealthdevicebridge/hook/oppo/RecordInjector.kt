@@ -6,11 +6,11 @@ import de.robv.android.xposed.XposedBridge
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
 
 /**
- * Production entry for the 6.10.13 integration.
+ * Production entry for the 6.10.14 integration.
  *  - Captures an application context once.
  *  - Installs the catalog / pairing / bind / measurement hooks in the UI process.
+ *  - Injects the bound Mi scale into the device list / switcher as a native body-fat scale.
  *  - Starts the background measurement loop in :SportDaemonService (where the DB engine lives).
- *  - Arms the optional data-export hook (gated behind a marker file).
  */
 object RecordInjector {
 
@@ -27,21 +27,25 @@ object RecordInjector {
                     val ctx = param.args.firstOrNull { it is Context } as? Context ?: return
                     armed = true
                     ContextHolder.set(ctx)
-                    DbBridge.install(cl)
                     CatalogHook.install(cl)
                     ScanHook.install(cl)
                     BindProbe.install(cl)
+                    // Device-list overlay: make the bound Mi scale show up next to other devices.
+                    runCatching { BooheeDeviceOverlayHook.install(cl) }.onFailure {
+                        if (it is VirtualMachineError) throw it
+                        BridgeLog.e("overlay hook failed", it as? Exception)
+                    }
+                    runCatching { BooheeDeviceOverlayHook.installDeviceTab(cl) }.onFailure {
+                        if (it is VirtualMachineError) throw it
+                        BridgeLog.e("deviceTab hook failed", it as? Exception)
+                    }
+                    runCatching { BooheeDeviceOverlayHook.installSelectDevice(cl) }.onFailure {
+                        if (it is VirtualMachineError) throw it
+                        BridgeLog.e("selectDevice hook failed", it as? Exception)
+                    }
                     val proc = runCatching { android.app.Application.getProcessName() }.getOrNull()
                     if (proc == "com.heytap.health:SportDaemonService") {
                         XiaomiAutoRecord.start(cl, ctx)
-                        Thread({
-                            runCatching {
-                                if (java.io.File("/sdcard/Download/oh_fix_members.flag").exists()) {
-                                    Thread.sleep(4_000)
-                                    MemberFix.run(cl, ctx)
-                                }
-                            }.onFailure { BridgeLog.e("memberfix trigger failed", it as? Exception) }
-                        }, "oh-memfix").start()
                         BridgeLog.i("auto-record armed in $proc")
                     }
                 }
