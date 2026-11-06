@@ -11,8 +11,8 @@ android {
         applicationId = "io.github.brucezhang1993.ohealthdevicebridge"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("versionCode").orElse("13").get().toInt()
-        versionName = providers.gradleProperty("versionName").orElse("0.8.5-mi1").get()
+        versionCode = providers.gradleProperty("versionCode").orElse("14").get().toInt()
+        versionName = providers.gradleProperty("versionName").orElse("0.9.0-mi1").get()
     }
 
     testOptions.unitTests.isReturnDefaultValues = true

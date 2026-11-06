@@ -9,7 +9,6 @@ import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
 import io.github.brucezhang1993.ohealthdevicebridge.device.DeviceRegistry
 import io.github.brucezhang1993.ohealthdevicebridge.device.xiaomi.MiScaleDriver
 import io.github.brucezhang1993.ohealthdevicebridge.device.xiaomi.XiaomiModels
-import io.github.brucezhang1993.ohealthdevicebridge.store.BridgeBindingStore
 import io.github.brucezhang1993.ohealthdevicebridge.store.ScalePrefs
 import java.lang.reflect.Field
 
@@ -45,7 +44,6 @@ object ScanHook {
 
     private val main = Handler(Looper.getMainLooper())
 
-    @Volatile private var loader: ClassLoader? = null
     @Volatile private var bridgeActive = false
     @Volatile private var model = XiaomiModels.V1_BODY
     @Volatile private var displayName = "小米体脂秤（一代）"
@@ -53,7 +51,6 @@ object ScanHook {
     @Volatile private var searchSeq = 0
 
     fun install(cl: ClassLoader) {
-        loader = cl
         // 1. Pairing page: identify our product from the intent and force the BOOHEE route.
         runCatching {
             val act = cl.loadClass(ACTIVITY)
@@ -242,12 +239,6 @@ object ScanHook {
             val ctx = ContextHolder.get()
             if (ctx != null && !mac.isNullOrBlank()) {
                 ScalePrefs.save(ctx, mac, model)
-                // Register in the binding store so the device-list overlay can surface it.
-                runCatching {
-                    val cl = loader
-                    val account = cl?.let { runCatching { OppoAccount.key(it) }.getOrNull() } ?: "local"
-                    BridgeBindingStore.add(ctx, account, mac, model)
-                }.onFailure { BridgeLog.e("BIND store add failed", it as? Exception) }
                 BridgeLog.i("BIND persisted mac=${BridgeLog.maskedMac(mac)} (measurement loop now targets it)")
             }
             callFn1(onSuccess, device)

@@ -11,9 +11,9 @@ import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
  */
 object OppoRecordWriter {
 
-    fun write(cl: ClassLoader, ctx: Context, weightKg: Double, resistanceOhm: Float, timestampEpochSeconds: Long, userTag: String? = null): Boolean {
+    fun write(cl: ClassLoader, ctx: Context, weightKg: Double, resistanceOhm: Float, timestampEpochSeconds: Long): Boolean {
         return runCatching {
-            val ssoid = userTag ?: ssoid(cl)
+            val ssoid = ssoid(cl)
             BridgeLog.i("WRITE start w=${weightKg} r=$resistanceOhm ssoid=[$ssoid]")
 
             val modelCls = cl.loadClass("com.boohee.scale_sdk.data.BHScaleModel")
@@ -57,7 +57,7 @@ object OppoRecordWriter {
         }.onFailure { BridgeLog.e("WRITE aborted", it as? Exception); false }.getOrDefault(false)
     }
 
-    internal fun ssoid(cl: ClassLoader): String? = runCatching {
+    private fun ssoid(cl: ClassLoader): String? = runCatching {
         val holder = cl.loadClass("lc0.d").getMethod("h").invoke(null)
         holder.javaClass.getMethod("getSsoid").invoke(holder) as? String
     }.getOrNull()

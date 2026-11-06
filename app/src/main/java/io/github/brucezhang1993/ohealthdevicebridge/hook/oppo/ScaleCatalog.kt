@@ -1,6 +1,7 @@
 package io.github.brucezhang1993.ohealthdevicebridge.hook.oppo
 
 import android.content.Context
+import io.github.brucezhang1993.ohealthdevicebridge.BridgeConstants
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
 import io.github.brucezhang1993.ohealthdevicebridge.device.DeviceRegistry
 import io.github.brucezhang1993.ohealthdevicebridge.device.xiaomi.XiaomiModels
@@ -25,6 +26,7 @@ object ScaleCatalog {
         Spec(XiaomiModels.V1_BODY, "小米体脂秤（一代）", "支持小米体脂秤一代"),
         Spec(XiaomiModels.V1, "小米体重秤（一代）", "支持小米体重秤一代"),
         Spec(XiaomiModels.V2, "小米体脂秤（二代）", "支持小米体脂秤二代"),
+        Spec(BridgeConstants.AFU_MODEL, "薄荷健康B1体脂秤", "支持薄荷健康B1"),
     )
 
     @Volatile private var cache: List<Spec>? = null
