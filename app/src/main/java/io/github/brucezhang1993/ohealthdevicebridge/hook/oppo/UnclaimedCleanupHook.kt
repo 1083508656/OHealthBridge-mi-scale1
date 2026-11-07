@@ -38,6 +38,7 @@ object UnclaimedCleanupHook {
     private const val TABLE_WEIGHT = 1021
 
     @Volatile private var ran = false
+    @Volatile private var profile: OppoVersionProfile = OppoVersionProfile.V610
 
     /** Installs the hook; the cleanup itself runs after the unclaimed page is created. */
     fun install(cl: ClassLoader, ctx: Context) {
@@ -46,6 +47,7 @@ object UnclaimedCleanupHook {
                 BridgeLog.i("unclaimed cleanup: already done")
                 return
             }
+            profile = OppoVersionProfile.detect(cl)
             val vmCls = XposedHelpers.findClass(VIEW_MODEL, cl)
             XposedBridge.hookAllConstructors(vmCls, object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
@@ -62,8 +64,9 @@ object UnclaimedCleanupHook {
     /**
      * Reads every unclaimed row and discards it through the page's own ViewModel method.
      *
-     * The rows are read from `vm.l` (the list LiveData the page itself renders) rather than by
-     * querying the database, so only rows OPPO already considers unclaimed are touched.
+     * The rows are read from the page's own list LiveData rather than by querying the database, so
+     * only rows OPPO already considers unclaimed are touched. The field and method names differ by
+     * version: 6.10.x uses `l` / `u`, 6.9.x uses `dataList` / `deleteItem`.
      */
     private fun sweep(cl: ClassLoader, ctx: Context, vm: Any) {
         // The list arrives asynchronously; give the page a moment to publish it.
@@ -72,7 +75,7 @@ object UnclaimedCleanupHook {
             if (rows.isNotEmpty()) return@repeat
             Thread.sleep(500)
             rows = runCatching {
-                val live = XposedHelpers.getObjectField(vm, "l")
+                val live = XposedHelpers.getObjectField(vm, profile.unclaimedListField)
                 val value = live.javaClass.getMethod("getValue").invoke(live)
                 (value as? List<*>) ?: emptyList<Any?>()
             }.getOrDefault(emptyList<Any?>())
@@ -93,7 +96,7 @@ object UnclaimedCleanupHook {
                 return@forEach
             }
             val ok = runCatching {
-                vm.javaClass.getMethod("u", String::class.java, String::class.java)
+                vm.javaClass.getMethod(profile.unclaimedDeleteMethod, String::class.java, String::class.java)
                     .invoke(vm, tag, weightId)
                 true
             }.onFailure { BridgeLog.e("unclaimed delete failed", it as? Exception) }

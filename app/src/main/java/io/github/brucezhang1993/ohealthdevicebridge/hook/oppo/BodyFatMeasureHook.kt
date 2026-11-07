@@ -94,16 +94,24 @@ object BodyFatMeasureHook {
 
     @Volatile private var receiverRegistered = false
 
+    /** Version surface of the running OPPO Health, detected once. */
+    @Volatile private var profile: OppoVersionProfile = OppoVersionProfile.V610
+
     /** Cached BHUserModel; the weight field is refreshed per reading. */
     @Volatile private var userModel: Any? = null
     @Volatile private var userModelResolved = false
 
     fun install(cl: ClassLoader, appContext: android.content.Context? = null) {
         runCatching {
+            profile = OppoVersionProfile.detect(cl)
+            BridgeLog.i("measure hook: version profile=${profile.label}")
+
             val act = XposedHelpers.findClass(ACTIVITY, cl)
             XposedBridge.hookAllMethods(act, "onCreate", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
-                    val vm = runCatching { XposedHelpers.getObjectField(param.thisObject, "k") }.getOrNull()
+                    val vm = runCatching {
+                        XposedHelpers.getObjectField(param.thisObject, profile.activityVmField)
+                    }.getOrNull()
                     if (vm != null) {
                         viewModel = vm
                         // Fresh page, fresh profile: the selected member may have changed.
@@ -119,16 +127,20 @@ object BodyFatMeasureHook {
                     viewModel = null
                 }
             })
-            // Observability only: "u6 refused the reading" is the failure mode worth seeing.
-            XposedBridge.hookAllMethods(act, "u6", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val vm = runCatching { XposedHelpers.getObjectField(param.thisObject, "k") }.getOrNull()
-                    if (vm == null) return
-                    val model = runCatching { XposedHelpers.getObjectField(vm, "w") }.getOrNull()
-                    val weight = runCatching { XposedHelpers.getDoubleField(vm, "x") }.getOrDefault(0.0)
-                    BridgeLog.i("u6 called model=${model != null} weight=$weight")
-                }
-            })
+            // 6.10.x only: u6() silently refuses a reading when vm.w/x are not set. Log that
+            // gate so a regressions shows up instead of hanging the page.
+            if (profile == OppoVersionProfile.V610) {
+                XposedBridge.hookAllMethods(act, "u6", object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val vm = runCatching {
+                            XposedHelpers.getObjectField(param.thisObject, profile.activityVmField)
+                        }.getOrNull() ?: return
+                        val model = runCatching { XposedHelpers.getObjectField(vm, profile.vmModelField) }.getOrNull()
+                        val weight = runCatching { XposedHelpers.getDoubleField(vm, profile.vmWeightField) }.getOrDefault(0.0)
+                        BridgeLog.i("u6 called model=${model != null} weight=$weight")
+                    }
+                })
+            }
             registerReceiver(cl, appContext)
             BridgeLog.i("measure hook installed on BodyFatMeasureActivity")
         }.onFailure { BridgeLog.e("measure hook failed", it as? Exception) }
@@ -185,29 +197,25 @@ object BodyFatMeasureHook {
      *
      * Two things have to happen together, and skipping either one is why earlier attempts stalled:
      *
-     * 1. `vm.w` / `vm.x` must be populated, otherwise `u6()` returns immediately. The model comes
-     *    from OPPO's own converter, so every derived metric (body fat, muscle, water…) matches what
-     *    a native Lifesense scale would have written.
-     * 2. The value posted to `vm.l` must carry the real `stable` flag. `ViewModel.f(WeightData)`
-     *    hardcodes `n(weight, true)`, so going through it marks the very first frame as settled and
-     *    the page finalises on a half-standing reading.
+     * 1. The settle guard must be satisfied. On 6.10.x that is `vm.w != null && vm.x > 0`, which
+     *    `u6()` checks before it will persist anything; the model comes from OPPO's own converter.
+     *    6.9.x has no such guard, but it still needs the raw model so its own write path can
+     *    compute the body-fat metrics.
+     * 2. The value posted to the measure LiveData must carry the real `stable` flag. On both
+     *    versions the native sink hardcodes the settled state, so the module posts the value
+     *    itself: `n(weight, stable)` on 6.10.x, `MeasureEvent(weight, stable, LIFESENSE)` on 6.9.x.
      */
     private fun pushLiveLocal(cl: ClassLoader, weightKg: Double, resistanceOhm: Double, stable: Boolean) {
         val vm = viewModel ?: return
         runCatching {
             feedScaleModel(cl, vm, weightKg, resistanceOhm)
 
-            val value = cl.loadClass(WEIGHT_VALUE)
-                .getConstructor(Double::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-                .newInstance(weightKg, stable)
-            val liveData = runCatching { XposedHelpers.getObjectField(vm, "l") }.getOrNull()
+            val value = buildMeasureValue(cl, weightKg, stable)
+            val liveData = runCatching {
+                XposedHelpers.getObjectField(vm, profile.vmMeasureLiveDataField)
+            }.getOrNull()
             if (liveData == null) {
-                // Field renamed: fall back to the native sink so the number still moves, even
-                // though it will settle early.
-                val wdCls = cl.loadClass(WEIGHT_DATA)
-                val wd = wdCls.getConstructor().newInstance()
-                wdCls.getMethod("setWeight", Double::class.javaPrimitiveType).invoke(wd, weightKg)
-                vm.javaClass.getMethod("f", wdCls).invoke(vm, wd)
+                BridgeLog.i("measure LiveData field '${profile.vmMeasureLiveDataField}' missing")
             } else {
                 liveData.javaClass.getMethod("postValue", Any::class.java).invoke(liveData, value)
             }
@@ -215,18 +223,41 @@ object BodyFatMeasureHook {
         }.onFailure { BridgeLog.e("measure push failed", it as? Exception) }
     }
 
+    /** Builds the value object carried by the measure LiveData for the detected version. */
+    private fun buildMeasureValue(cl: ClassLoader, weightKg: Double, stable: Boolean): Any? = runCatching {
+        when (profile) {
+            OppoVersionProfile.V610 -> {
+                cl.loadClass(WEIGHT_VALUE)
+                    .getConstructor(Double::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
+                    .newInstance(weightKg, stable)
+            }
+            OppoVersionProfile.V69 -> {
+                // MeasureEvent(D weightKg, Z locked, ScaleVendor vendor)
+                val vendor = cl.loadClass("com.heytap.device.ui.weight.scale.ScaleVendor")
+                val lifespense = vendor.getField("LIFESENSE").get(null)
+                cl.loadClass("com.heytap.device.ui.weight.BodyFatMeasureViewModel\$MeasureEvent")
+                    .getConstructor(
+                        Double::class.javaPrimitiveType,
+                        Boolean::class.javaPrimitiveType,
+                        vendor
+                    )
+                    .newInstance(weightKg, stable, lifespense)
+            }
+        }
+    }.onFailure { BridgeLog.e("measure value build failed", it as? Exception) }.getOrNull()
+
     /**
-     * Writes `vm.w` (a fully populated BHScaleModel) and `vm.x` (the weight) so `u6()` accepts the
-     * reading and `l.call()` can persist it.
+     * Populates the ViewModel's raw-model / weight fields so the write path can persist the
+     * reading and (on 6.10.x) `u6()` accepts it.
      */
     private fun feedScaleModel(cl: ClassLoader, vm: Any, weightKg: Double, resistanceOhm: Double) {
         val model = buildScaleModel(cl, vm, weightKg, resistanceOhm)
         if (model == null) {
-            BridgeLog.i("scale model unavailable, u6() will refuse this frame")
+            BridgeLog.i("scale model unavailable, write path will not run")
             return
         }
-        XposedHelpers.setObjectField(vm, "w", model)
-        XposedHelpers.setDoubleField(vm, "x", weightKg)
+        XposedHelpers.setObjectField(vm, profile.vmModelField, model)
+        XposedHelpers.setDoubleField(vm, profile.vmWeightField, weightKg)
     }
 
     /**
@@ -266,7 +297,7 @@ object BodyFatMeasureHook {
 
     private fun attachDeviceMac(cl: ClassLoader, modelCls: Class<*>, raw: Any, vm: Any) {
         runCatching {
-            val mac = XposedHelpers.getObjectField(vm, "u") as? String
+            val mac = XposedHelpers.getObjectField(vm, profile.vmMacField) as? String
             if (mac.isNullOrBlank()) return
             val field = modelCls.getField("deviceModel")
             val deviceType = field.type
@@ -291,7 +322,7 @@ object BodyFatMeasureHook {
             return refreshWeight(cl, cached, weightKg)
         }
         userModelResolved = true
-        val tag = runCatching { XposedHelpers.getObjectField(vm, "v") as? String }.getOrNull()
+        val tag = runCatching { XposedHelpers.getObjectField(vm, profile.vmMemberTagField) as? String }.getOrNull()
 
         userModel = runCatching {
             val profileHelper = cl.loadClass(PROFILE_HELPER)

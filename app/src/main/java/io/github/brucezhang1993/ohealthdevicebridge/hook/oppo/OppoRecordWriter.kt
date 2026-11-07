@@ -4,14 +4,55 @@ import android.content.Context
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
 
 /**
- * Writes a measurement (weight + resistance) into OPPO Health's body-fat store, reusing the
- * exact verified pipeline for 6.10.13:
- *   BHScaleModel -> h.m() compute -> i0.d() build record -> WeightScaleServiceImpl.q0() normalize
- *   -> BodyFatStore.b() persist (must run in the :SportDaemonService process).
+ * Writes a measurement (weight + resistance) into OPPO Health's body-fat store.
+ *
+ * Two versions use two different write paths:
+ *
+ *  - 6.10.x: BHScaleModel -> h.m() compute -> i0.d() build record ->
+ *    WeightScaleServiceImpl.q0() normalize -> BodyFatStore.b() persist.
+ *  - 6.9.x:  BooheeWeightSaver.saveLockedMeasure(BHScaleModel, kg, tag, prevWeight)
+ *    -> WeightBodyFat (single step, no obfuscated holder chain).
+ *
+ * Must run in the :SportDaemonService process where the database engine lives.
  */
 object OppoRecordWriter {
 
+    @Volatile private var profile: OppoVersionProfile? = null
+
     fun write(cl: ClassLoader, ctx: Context, weightKg: Double, resistanceOhm: Float, timestampEpochSeconds: Long): Any? {
+        val p = profile ?: OppoVersionProfile.detect(cl).also { profile = it }
+        return when (p) {
+            OppoVersionProfile.V69 -> writeV69(cl, weightKg, resistanceOhm)
+            OppoVersionProfile.V610 -> writeV610(cl, ctx, weightKg, resistanceOhm, timestampEpochSeconds)
+        }
+    }
+
+    /**
+     * 6.9.x write path: BooheeWeightSaver.saveLockedMeasure is a public, un-obfuscated single step.
+     * It needs the ssoid-derived tag to attribute the row to the account owner.
+     */
+    private fun writeV69(cl: ClassLoader, weightKg: Double, resistanceOhm: Float): Any? = runCatching {
+        val modelCls = cl.loadClass("com.boohee.scale_sdk.data.BHScaleModel")
+        val model = modelCls.getDeclaredConstructor().newInstance()
+        modelCls.getField("weight").setFloat(model, weightKg.toFloat())
+        if (resistanceOhm > 0) {
+            modelCls.getField("bodyResistance").setFloat(model, resistanceOhm.toFloat())
+        }
+        modelCls.getField("second").setLong(model, System.currentTimeMillis() / 1000)
+
+        val saverCls = cl.loadClass("com.heytap.device.ui.weight.scale.boohee.BooheeWeightSaver")
+        val saver = saverCls.getField("INSTANCE").get(null)
+        val tag = ssoid(cl)
+        BridgeLog.i("WRITE V69 saveLockedMeasure tag=[$tag]")
+        val record = saverCls.getMethod(
+            "saveLockedMeasure", modelCls,
+            Double::class.javaPrimitiveType, String::class.java, String::class.java
+        ).invoke(saver, model, weightKg, tag, null)
+        BridgeLog.i("WRITE V69 result=${record != null}")
+        record
+    }.onFailure { BridgeLog.e("WRITE V69 aborted", it as? Exception); null }.getOrNull()
+
+    private fun writeV610(cl: ClassLoader, ctx: Context, weightKg: Double, resistanceOhm: Float, timestampEpochSeconds: Long): Any? {
         return runCatching {
             val ssoid = ssoid(cl)
             BridgeLog.i("WRITE start w=${weightKg} r=$resistanceOhm ssoid=[$ssoid]")
