@@ -11,7 +11,7 @@ import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
  */
 object OppoRecordWriter {
 
-    fun write(cl: ClassLoader, ctx: Context, weightKg: Double, resistanceOhm: Float, timestampEpochSeconds: Long): Boolean {
+    fun write(cl: ClassLoader, ctx: Context, weightKg: Double, resistanceOhm: Float, timestampEpochSeconds: Long): Any? {
         return runCatching {
             val ssoid = ssoid(cl)
             BridgeLog.i("WRITE start w=${weightKg} r=$resistanceOhm ssoid=[$ssoid]")
@@ -62,8 +62,9 @@ object OppoRecordWriter {
             }.getOrNull()
 
             BridgeLog.i("WRITE insert result=$inserted")
-            inserted != null
-        }.onFailure { BridgeLog.e("WRITE aborted", it as? Exception); false }.getOrDefault(false)
+            if (inserted == null) return null
+            normalized
+        }.onFailure { BridgeLog.e("WRITE aborted", it as? Exception); null }.getOrNull()
     }
 
     private fun ssoid(cl: ClassLoader): String? = runCatching {

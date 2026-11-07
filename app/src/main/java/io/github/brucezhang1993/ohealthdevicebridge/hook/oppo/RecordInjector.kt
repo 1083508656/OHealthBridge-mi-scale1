@@ -48,6 +48,11 @@ object RecordInjector {
                         if (it is VirtualMachineError) throw it
                         BridgeLog.e("measure hook failed", it as? Exception)
                     }
+                    // One-shot: discard the unclaimed rows earlier builds left behind.
+                    runCatching { UnclaimedCleanupHook.install(cl, ctx) }.onFailure {
+                        if (it is VirtualMachineError) throw it
+                        BridgeLog.e("unclaimed cleanup install failed", it as? Exception)
+                    }
                     val proc = runCatching { android.app.Application.getProcessName() }.getOrNull()
                     if (proc == "com.heytap.health:SportDaemonService") {
                         XiaomiAutoRecord.start(cl, ctx)
