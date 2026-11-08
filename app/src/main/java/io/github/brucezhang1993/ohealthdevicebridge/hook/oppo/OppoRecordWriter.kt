@@ -55,7 +55,8 @@ object OppoRecordWriter {
     private fun writeV610(cl: ClassLoader, ctx: Context, weightKg: Double, resistanceOhm: Float, timestampEpochSeconds: Long): Any? {
         return runCatching {
             val ssoid = ssoid(cl)
-            BridgeLog.i("WRITE start w=${weightKg} r=$resistanceOhm ssoid=[$ssoid]")
+            val ownerTag = ownerTagId(cl) ?: ssoid
+            BridgeLog.i("WRITE start w=${weightKg} r=$resistanceOhm ssoid=[$ssoid] ownerTag=[$ownerTag]")
 
             val modelCls = cl.loadClass("com.boohee.scale_sdk.data.BHScaleModel")
             val model = modelCls.getDeclaredConstructor().newInstance()
@@ -77,7 +78,7 @@ object OppoRecordWriter {
             val record = runCatching {
                 cl.loadClass("com.heytap.device.ui.weight.scale.boohee.i0")
                     .getMethod("d", modelCls, Double::class.javaPrimitiveType, String::class.java, String::class.java, Class.forName("java.lang.Long"))
-                    .invoke(null, computed ?: model, weightKg, "BHScaleType_bodyFat", null, System.currentTimeMillis())
+                    .invoke(null, computed ?: model, weightKg, "BHScaleType_bodyFat", ownerTag, System.currentTimeMillis())
             }.onFailure { BridgeLog.e("WRITE convert failed", it as? Exception) }.getOrNull()
             if (record == null) { BridgeLog.e("WRITE record null"); return false }
 
@@ -111,6 +112,16 @@ object OppoRecordWriter {
     private fun ssoid(cl: ClassLoader): String? = runCatching {
         val holder = cl.loadClass("lc0.d").getMethod("h").invoke(null)
         holder.javaClass.getMethod("getSsoid").invoke(holder) as? String
+    }.getOrNull()
+
+    /**
+     * The account owner's userTagId (`utils.h0.i()` = `le.a(ssoid)`). `i0.d` uses its 4th
+     * argument as the record's `userTagId`; leaving it null leaves the row unattributed, which is
+     * what makes OPPO park it under "待认领" instead of filing it under the member.
+     */
+    private fun ownerTagId(cl: ClassLoader): String? = runCatching {
+        cl.loadClass("com.heytap.device.ui.weight.utils.h0")
+            .getMethod("i").invoke(null) as? String
     }.getOrNull()
 
     private fun holder(cl: ClassLoader): Any? = runCatching {
