@@ -66,15 +66,20 @@ internal class MiScaleDriver(override val model: String) : HistoryDeviceDriver {
             // to ~3kg). Accepting it would burn the 60s write cooldown and hide the real
             // measurement taken moments later, so anything under 10kg is treated as noise.
             if (reading != null && reading.record.weightKg >= 10.0) {
+                // The scale re-advertises its LAST settled measurement long after the user steps
+                // off. Only a frame whose embedded timestamp is recent is a live weighing; a stale
+                // one must not open a GATT link or pull up the measure page.
+                val age = System.currentTimeMillis() / 1000 - reading.record.timestampEpochSeconds
+                val fresh = age in 0..120
                 BridgeLog.i(
                     "XIAOMI broadcast ${BridgeLog.maskedMac(scan.device.address)} " +
-                        "w=${reading.record.weightKg} r=${reading.record.resistanceOhm} stable=${reading.stable}"
+                        "w=${reading.record.weightKg} r=${reading.record.resistanceOhm} stable=${reading.stable} age=${age}s fresh=$fresh"
                 )
                 onBroadcast?.invoke(reading.record)
                 // Show the frame right away, then open a GATT link. The advertisement only carries
                 // the occasional settled frame, while the GATT notifications stream every
                 // intermediate value — that is what the measure page needs to show "settling".
-                if (!finished) {
+                if (!finished && fresh) {
                     finished = true; stop?.invoke()
                     BridgeLog.i("XIAOMI known-device hit ${BridgeLog.maskedMac(scan.device.address)}")
                     onDevice(BridgeDevice(scan.device.address, label(), model))

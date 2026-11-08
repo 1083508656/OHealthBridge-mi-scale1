@@ -5,6 +5,7 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
+import io.github.brucezhang1993.ohealthdevicebridge.store.ScalePrefs
 import java.io.File
 
 /**
@@ -147,6 +148,7 @@ object BodyFatMeasureHook {
             }
             installG0HeightFix(cl)
             installBiaFix(cl)
+            installDeviceNameFix(cl, appContext)
             registerReceiver(cl, appContext)
             BridgeLog.i("measure hook installed on BodyFatMeasureActivity")
         }.onFailure { BridgeLog.e("measure hook failed", it as? Exception) }
@@ -346,6 +348,34 @@ object BodyFatMeasureHook {
 
     private fun setFloat(target: Any, field: String, value: Float) {
         runCatching { target.javaClass.getField(field).setFloat(target, value) }
+    }
+
+    /**
+     * `i0.d` names the source device from the bound-device record (or the owner tag), which shows
+     * up as "薄荷健康体脂秤" on the result page for our injected Xiaomi scale. Rewrite it to the
+     * real source once we know the record belongs to the bound Mi scale.
+     */
+    private fun installDeviceNameFix(cl: ClassLoader, appContext: android.content.Context?) {
+        runCatching {
+            val i0 = cl.loadClass("com.heytap.device.ui.weight.scale.boohee.i0")
+            XposedBridge.hookAllMethods(i0, "d", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val record = param.result ?: return
+                    runCatching {
+                        val model = param.args.getOrNull(0) ?: return
+                        val deviceModel = model.javaClass.getField("deviceModel").get(model) ?: return
+                        val mac = deviceModel.javaClass.getField("deviceMac").get(deviceModel) as? String ?: return
+                        val ctx = appContext ?: OppoReflect.context() ?: return
+                        val binding = ScalePrefs.load(ctx) ?: return
+                        if (binding.mac.equals(mac, ignoreCase = true)) {
+                            record.javaClass.getMethod("setDeviceName", String::class.java)
+                                .invoke(record, "小米体脂秤")
+                        }
+                    }.onFailure { BridgeLog.e("device name fix failed", it as? Exception) }
+                }
+            })
+            BridgeLog.i("device name fix hook installed")
+        }.onFailure { BridgeLog.e("device name fix hook failed", it as? Exception) }
     }
 
     private fun setInt(target: Any, field: String, value: Int) {

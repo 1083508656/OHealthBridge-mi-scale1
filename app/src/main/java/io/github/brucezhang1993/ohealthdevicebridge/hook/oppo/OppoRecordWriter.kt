@@ -81,6 +81,10 @@ object OppoRecordWriter {
                     .invoke(null, computed ?: model, weightKg, "BHScaleType_bodyFat", ownerTag, System.currentTimeMillis())
             }.onFailure { BridgeLog.e("WRITE convert failed", it as? Exception) }.getOrNull()
             if (record == null) { BridgeLog.e("WRITE record null"); return false }
+            // i0.d names the source from the bound device record (or the owner tag), which shows up
+            // as "薄荷健康体脂秤" on the result page. Override it so the row says where it really
+            // came from.
+            runCatching { record.javaClass.getMethod("setDeviceName", String::class.java).invoke(record, "小米体脂秤") }
 
             val normalized = if (ssoid.isNullOrBlank()) record else runCatching {
                 val impl = cl.loadClass("com.heytap.device.manager.WeightScaleServiceImpl").getDeclaredConstructor().newInstance()

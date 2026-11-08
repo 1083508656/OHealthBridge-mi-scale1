@@ -89,14 +89,16 @@ object XiaomiAutoRecord {
 
     private fun measureMi(cl: ClassLoader, ctx: Context, driver: DeviceDriver, binding: ScalePrefs.Binding?): Boolean {
         var handled = false
+        val done = AtomicBoolean(false)
         val mi = driver as? MiScaleDriver
         val stop = if (binding != null && mi != null) {
             BridgeLog.i("AUTORECORD listening on bound mac=${BridgeLog.maskedMac(binding.mac)}")
             mi.scanMac(ctx, binding.mac, SCAN_TIMEOUT_MS, { device ->
                 handled = true
                 measureOnce(cl, ctx, driver, device.mac)
-            }, { BridgeLog.i("AUTORECORD no measurement this window") }, { e ->
-                BridgeLog.e("AUTORECORD scan error", e)
+                done.set(true)
+            }, { BridgeLog.i("AUTORECORD no measurement this window"); done.set(true) }, { e ->
+                BridgeLog.e("AUTORECORD scan error", e); done.set(true)
             }, { rec ->
                 // The scale keeps re-advertising its LAST stable measurement with an unchanged
                 // timestamp, so the same frame arrives over and over long after the user stepped
@@ -108,13 +110,20 @@ object XiaomiAutoRecord {
                 }
                 lastBroadcast = key
                 handled = true
-                BridgeLog.i("AUTORECORD broadcast w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds}")
-                // A fresh weighing: pull up OPPO's own "measuring" page so the user sees the live
-                // weight, then settle it on the impedance-bearing frame below.
-                openMeasurePage(ctx, binding.mac, binding.model)
-                BodyFatMeasureHook.broadcastLive(
-                    ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toDouble(), stable = rec.resistanceOhm != null
-                )
+                // A re-advertised stale measurement must not pull up the measure page (that is the
+                // "no one standing on it, but 正在测量 pops up" bug). Only a frame with a recent
+                // embedded timestamp counts as a live weighing.
+                val age = System.currentTimeMillis() / 1000 - rec.timestampEpochSeconds
+                val fresh = age in 0..120
+                BridgeLog.i("AUTORECORD broadcast w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds} age=${age}s fresh=$fresh")
+                if (fresh) {
+                    // Pull up OPPO's own "measuring" page so the user sees the live weight, then
+                    // settle it on the impedance-bearing frame below.
+                    openMeasurePage(ctx, binding.mac, binding.model)
+                    BodyFatMeasureHook.broadcastLive(
+                        ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toDouble(), stable = rec.resistanceOhm != null
+                    )
+                }
                 // A broadcast that carries impedance is a settled measurement — the same data the
                 // scale would send over GATT. Persist it right here so background weighing works
                 // on any OPPO Health page without needing a GATT link (which the scale drops after
@@ -128,11 +137,18 @@ object XiaomiAutoRecord {
                 handled = true
                 BridgeLog.i("AUTORECORD found ${BridgeLog.maskedMac(device.mac)}")
                 measureOnce(cl, ctx, driver, device.mac)
-            }, { BridgeLog.i("AUTORECORD scan timeout") }, { e ->
-                BridgeLog.e("AUTORECORD scan error", e)
+                done.set(true)
+            }, { BridgeLog.i("AUTORECORD scan timeout"); done.set(true) }, { e ->
+                BridgeLog.e("AUTORECORD scan error", e); done.set(true)
             })
         }
-        Thread.sleep(SCAN_TIMEOUT_MS + 2_000)
+        // Wait for the scan to finish (device found / timeout / error) instead of sleeping the
+        // full timeout blind: that blind sleep made the scan window only ~44% of the cycle, so a
+        // stepping-on landed in a gap half the time. Poll until the callback settles.
+        val deadline = System.currentTimeMillis() + SCAN_TIMEOUT_MS + 5_000
+        while (!done.get() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(200)
+        }
         runCatching { stop() }
         if (handled) Thread.sleep(3_000)
         return handled
