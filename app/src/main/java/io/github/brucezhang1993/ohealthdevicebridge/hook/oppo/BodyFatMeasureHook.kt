@@ -142,6 +142,7 @@ object BodyFatMeasureHook {
                 })
             }
             installG0HeightFix(cl)
+            installBiaFix(cl)
             registerReceiver(cl, appContext)
             BridgeLog.i("measure hook installed on BodyFatMeasureActivity")
         }.onFailure { BridgeLog.e("measure hook failed", it as? Exception) }
@@ -188,7 +189,7 @@ object BodyFatMeasureHook {
         }.onFailure { BridgeLog.e("g0 height fix hook failed", it as? Exception) }
     }
 
-    /** Rebuilds an immutable g0 with a new `f` (height, metres). */
+    /** Rebuilds an immutable g0 with a new `f` (height, cm). */
     private fun rebuildG0(g0: Any, heightMeters: Float): Any? = runCatching {
         val c = g0.javaClass
         val ctor = c.getConstructor(
@@ -207,6 +208,144 @@ object BodyFatMeasureHook {
             c.getField("h").get(g0),
         )
     }.getOrNull()
+
+    /**
+     * The native body-fat algorithm (ICBodyFatAlgorithms.calc, WLA36) is a dual-frequency model:
+     * `getImp(s0,s1) = s0*4 + s1*6 + 1000`. The Xiaomi scale is single-frequency, so imp2 is 0 and
+     * the fused impedance lands outside the model's range -> the native result is bodyfat=0 / bmi=0
+     * (verified with weight/resistance/height/age all correct).
+     *
+     * So when the native pass leaves bodyfat or bmi at 0, recompute the whole composition with the
+     * Xiaomi / Zepp Life (holtek) single-frequency formulas and write the results back onto the
+     * returned model. That is the scale's own calibration, so the numbers match what Mi Fit would
+     * have shown, instead of a generic BIA estimate.
+     *
+     * Unit contract (reverse-engineered from `i0.d`): `bodyfat` / `muscle_rate` / `water` /
+     * `bone_rate` / `protein` are stored as 0..1 fractions; `muscle` / `bone` / `fat_mass` /
+     * `fat_free_weight` are kg; `visfat` / `bmr` / `bodyage` are raw ints.
+     */
+    private fun installBiaFix(cl: ClassLoader) {
+        if (profile != OppoVersionProfile.V610) return
+        runCatching {
+            val algo = cl.loadClass(WEIGHT_DATA_HELPER)
+            XposedBridge.hookAllMethods(algo, "handleScaleModelDetailByScaleModel", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val model = param.result ?: return
+                    runCatching {
+                        val weight = model.javaClass.getField("weight").getFloat(model)
+                        val bodyfat = model.javaClass.getField("bodyfat").getFloat(model)
+                        val bmi = model.javaClass.getField("bmi").getFloat(model)
+                        if (weight <= 0f) return
+                        if (bodyfat > 0f && bmi > 0f) return  // native already produced a result
+                        val user = param.args.getOrNull(1) ?: return
+                        val height = user.javaClass.getField("userHeight").getFloat(user)
+                        val age = user.javaClass.getField("age").getInt(user)
+                        val sexObj = user.javaClass.getField("sex").get(user)
+                        // sexObj is a BHUserGender enum constant (BHUserGenderMale/Female); its
+                        // class name is always "BHUserGender", so check the constant name instead.
+                        val isMale = sexObj == null || !sexObj.toString().contains("Female")
+                        val impedance = model.javaClass.getField("bodyResistance").getFloat(model).toDouble()
+
+                        // Xiaomi / Zepp Life (holtek) body-composition formulas, reverse-engineered
+                        // from the official JNI. These use the single-frequency impedance directly,
+                        // which is exactly the scale's own calibration.
+                        val w = weight.toDouble()
+                        // LBM coefficient (lean body mass).
+                        val lbm = (height * 9.058 / 100.0) * (height / 100.0) +
+                            w * 0.32 + 12.226 - impedance * 0.0068 - age * 0.0542
+                        // Body fat %.
+                        val lbmSub = when {
+                            !isMale && age <= 49 -> 9.25
+                            isMale && age > 49 -> 7.25
+                            else -> 0.8
+                        }
+                        var coeff = 1.0
+                        if (isMale && w < 61.0) coeff = 0.98
+                        else if (!isMale && w > 60.0) { coeff = 0.96; if (height > 160f) coeff *= 1.03 }
+                        else if (!isMale && w < 50.0) { coeff = 1.02; if (height > 160f) coeff *= 1.03 }
+                        var bfCalc = ((1.0 - ((lbm - lbmSub) * coeff / w)) * 100.0)
+                        if (bfCalc > 63.0) bfCalc = 75.0
+                        // BMI.
+                        val bmiCalc = w / (((height * height) / 100.0) / 100.0)
+                        // Bone mass (kg).
+                        val boneBase = if (isMale) 0.18016894 else 0.245691014
+                        var bone = (boneBase - lbm * 0.05158) * -1.0
+                        if (bone > 2.2) bone += 0.1 else bone -= 0.1
+                        if (!isMale && bone > 5.1) bone = 8.0
+                        else if (isMale && bone > 5.2) bone = 8.0
+                        // Muscle mass (kg).
+                        var muscle = w - (bfCalc * 0.01 * w) - bone
+                        if (!isMale && muscle >= 84.0) muscle = 120.0
+                        else if (isMale && muscle >= 93.5) muscle = 120.0
+                        // Water %.
+                        val waterRaw = (100.0 - bfCalc) * 0.7
+                        val water = (if (waterRaw < 50.0) 1.02 else 0.98) * waterRaw
+                        // Visceral fat (index).
+                        val visfat = if (isMale) {
+                            if (height < w * 1.6) {
+                                val sub = ((height * 0.4) - (height * (height * 0.0826))) * -1.0
+                                (w * 305.0 / (sub + 48.0)) - 2.9 + age * 0.15
+                            } else {
+                                val sub = 0.765 + height * -0.0015
+                                ((height * 0.143) - (w * sub)) * -1.0 + age * 0.15 - 5.0
+                            }
+                        } else {
+                            if (w > (13.0 - (height * 0.5)) * -1.0) {
+                                val subsub = ((height * 1.45) + (height * 0.1158) * height) - 120.0
+                                val sub = w * 500.0 / subsub
+                                (sub - 6.0) + age * 0.07
+                            } else {
+                                val sub = 0.691 + height * -0.0024 + height * -0.0024
+                                ((height * 0.027) - (sub * w)) * -1.0 + age * 0.07 - age
+                            }
+                        }
+                        // BMR (Mifflin-St Jeor).
+                        val bmr = (10.0 * w + 6.25 * height - 5.0 * age + (if (isMale) 5.0 else -161.0)).toInt()
+                        // OPPO stores rate fields as fractions (0..1): i0.d() maps them back with
+                        // `bodyFatRate = round(bodyfat * 100)` / `muscleRate = round(muscle_rate * 100)`.
+                        // Writing a percentage here would inflate every value by 100x.
+                        val bfFraction = bfCalc / 100.0
+                        val muscleRateFraction = (muscle / w).coerceIn(0.1, 0.9)
+                        val waterFraction = water / 100.0
+                        val boneRateFraction = (bone / w).coerceIn(0.01, 0.2)
+                        val fatMass = w * bfFraction
+
+                        if (bmi <= 0f) model.javaClass.getField("bmi").setFloat(model, bmiCalc.toFloat())
+                        if (bodyfat <= 0f) model.javaClass.getField("bodyfat").setFloat(model, bfFraction.toFloat())
+                        setDouble(model, "fat_free_weight", lbm)            // kg (LBM)
+                        setFloat(model, "fat_mass", fatMass.toFloat())      // kg (F field)
+                        setDouble(model, "water", waterFraction)            // fraction
+                        setDouble(model, "water_content", waterFraction)    // fraction
+                        setDouble(model, "bone", bone)                      // kg
+                        setDouble(model, "bone_rate", boneRateFraction)     // fraction
+                        setDouble(model, "muscle", muscle)                  // kg
+                        setDouble(model, "muscle_rate", muscleRateFraction) // fraction
+                        setDouble(model, "visfat", visfat)                  // level
+                        setDouble(model, "protein", 0.16)                   // protein rate fraction
+                        setInt(model, "bmr", bmr)
+                        setInt(model, "bodyage", age)
+                        BridgeLog.i(
+                            "BIA fix: imp=$impedance bmi=%.1f bf=%.1f%% muscle=%.0fkg muscleRate=%.0f%% water=%.0f%% bone=%.1fkg bmr=$bmr"
+                                .format(bmiCalc, bfCalc, muscle, muscleRateFraction * 100.0, water, bone)
+                        )
+                    }.onFailure { BridgeLog.e("BIA fix failed", it as? Exception) }
+                }
+            })
+            BridgeLog.i("BIA fix hook installed")
+        }.onFailure { BridgeLog.e("BIA fix hook failed", it as? Exception) }
+    }
+
+    private fun setDouble(target: Any, field: String, value: Double) {
+        runCatching { target.javaClass.getField(field).setDouble(target, value) }
+    }
+
+    private fun setFloat(target: Any, field: String, value: Float) {
+        runCatching { target.javaClass.getField(field).setFloat(target, value) }
+    }
+
+    private fun setInt(target: Any, field: String, value: Int) {
+        runCatching { target.javaClass.getField(field).setInt(target, value) }
+    }
 
     /** True while OPPO's measure page is in the foreground (main process only). */
     fun isMeasuring(): Boolean = viewModel != null
