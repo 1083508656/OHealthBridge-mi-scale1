@@ -1,6 +1,7 @@
 package io.github.brucezhang1993.ohealthdevicebridge.hook.oppo
 
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeConstants
@@ -43,6 +44,9 @@ object XiaomiAutoRecord {
     /** Last measurement already persisted, so the GATT final callback can't double-write the same
      *  weighing that the advertisement path just wrote. */
     @Volatile private var lastWritten: Pair<Long, Double>? = null
+
+    /** Debounce for auto-opening the measure page (avoid double-start on re-advertised frames). */
+    @Volatile private var lastMeasurePageOpenAt = 0L
 
     /** Debounced write for the broadcast path; replaced every time a newer frame arrives. */
     @Volatile private var pendingWrite: Runnable = Runnable { }
@@ -105,6 +109,12 @@ object XiaomiAutoRecord {
                 lastBroadcast = key
                 handled = true
                 BridgeLog.i("AUTORECORD broadcast w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds}")
+                // A fresh weighing: pull up OPPO's own "measuring" page so the user sees the live
+                // weight, then settle it on the impedance-bearing frame below.
+                openMeasurePage(ctx, binding.mac, binding.model)
+                BodyFatMeasureHook.broadcastLive(
+                    ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toDouble(), stable = rec.resistanceOhm != null
+                )
                 // A broadcast that carries impedance is a settled measurement — the same data the
                 // scale would send over GATT. Persist it right here so background weighing works
                 // on any OPPO Health page without needing a GATT link (which the scale drops after
@@ -133,6 +143,8 @@ object XiaomiAutoRecord {
         val profile = UserProfile(age = 30, male = true, targetKg = 75.0)
         driver.measure(ctx, mac, profile, { w ->
             BridgeLog.i("AUTORECORD live %.2f kg".format(w))
+            // GATT saw the scale before the advertisement did: pull up the measure page here too.
+            openMeasurePage(ctx, mac, driver.model)
             // Mirror the live reading into OPPO's measure page. It lives in the main process, so
             // this has to travel as a broadcast instead of a direct call. stable=false keeps the
             // page animating instead of finalising on the first frame.
@@ -151,6 +163,31 @@ object XiaomiAutoRecord {
             BridgeLog.e("AUTORECORD measure error", e)
             driver.disconnect(mac)
         })
+    }
+
+    /**
+     * Pulls up OPPO's own "measuring" page (BodyFatMeasureActivity) so the user sees the live
+     * weight instead of weighing blindly in the background. Reads its intent via getStringExtra, so
+     * a plain component Intent works — no ARouter needed. vendor=boohee matches what the pairing
+     * hooks already force for our models.
+     */
+    private fun openMeasurePage(ctx: Context, mac: String, model: String) {
+        if (BodyFatMeasureHook.isMeasurePageOpen(ctx)) return  // already on the page
+        val now = System.currentTimeMillis()
+        if (now - lastMeasurePageOpenAt < 5_000L) return        // debounce re-advertised frames
+        lastMeasurePageOpenAt = now
+        runCatching {
+            val intent = Intent().apply {
+                setClassName("com.heytap.health", "com.heytap.device.ui.weight.BodyFatMeasureActivity")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra("body_fat_scale_vendor", "boohee")
+                putExtra("body_fat_device_mac", mac)
+                putExtra("key_device_mac", mac)
+                putExtra("body_fat_device_type", model)
+            }
+            ctx.startActivity(intent)
+            BridgeLog.i("AUTORECORD opened measure page for ${BridgeLog.maskedMac(mac)}")
+        }.onFailure { BridgeLog.e("AUTORECORD open measure page failed", it as? Exception) }
     }
 
     /**
