@@ -40,6 +40,10 @@ object XiaomiAutoRecord {
     /** Last advertisement frame already handled, so re-advertised stale values are ignored. */
     @Volatile private var lastBroadcast: Pair<Long, Double>? = null
 
+    /** Last measurement already persisted, so the GATT final callback can't double-write the same
+     *  weighing that the advertisement path just wrote. */
+    @Volatile private var lastWritten: Pair<Long, Double>? = null
+
     /** Debounced write for the broadcast path; replaced every time a newer frame arrives. */
     @Volatile private var pendingWrite: Runnable = Runnable { }
 
@@ -98,13 +102,16 @@ object XiaomiAutoRecord {
                     BridgeLog.i("AUTORECORD broadcast duplicate t=${rec.timestampEpochSeconds}")
                     return@scanMac
                 }
-lastBroadcast = key
+                lastBroadcast = key
                 handled = true
                 BridgeLog.i("AUTORECORD broadcast w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds}")
-                // Deliberately NOT mirrored to the measure page here: replaying a stale value
-                // finalises the page before the user stands on the scale. The GATT notification
-                // stream drives the page instead; the write + composition hand-off happen on the
-                // settled frame reported by measureOnce.
+                // A broadcast that carries impedance is a settled measurement — the same data the
+                // scale would send over GATT. Persist it right here so background weighing works
+                // on any OPPO Health page without needing a GATT link (which the scale drops after
+                // ~30s of silence, making the GATT path unreliable).
+                if (rec.resistanceOhm != null && rec.weightKg >= 10.0) {
+                    persist(cl, ctx, rec, "broadcast")
+                }
             })
         } else {
             driver.scan(ctx, SCAN_TIMEOUT_MS, { device ->
@@ -137,7 +144,7 @@ lastBroadcast = key
             BodyFatMeasureHook.broadcastLive(ctx, rec.weightKg, (rec.resistanceOhm ?: 0).toDouble(), stable = true)
             // Plausible body weight only: the scale also advertises wake-up frames (a few kg).
             if (rec.weightKg >= 10.0) {
-                persist(cl, ctx, rec, "broadcast")
+                persist(cl, ctx, rec, "final")
             }
             driver.disconnect(mac)
         }, { }, { e ->
@@ -162,7 +169,13 @@ lastBroadcast = key
      */
     private fun persist(cl: ClassLoader, ctx: Context, rec: MeasurementRecord, tag: String) {
         if (rec.weightKg < 10.0) return
-        val pageOpen = BodyFatMeasureHook.isMeasuring()
+        val key = rec.timestampEpochSeconds to rec.weightKg
+        if (key == lastWritten) {
+            BridgeLog.i("AUTORECORD $tag skip already written")
+            return
+        }
+        lastWritten = key
+        val pageOpen = BodyFatMeasureHook.isMeasuring() || BodyFatMeasureHook.isMeasurePageOpen(ctx)
         if (pageOpen) {
             BridgeLog.i("AUTORECORD $tag: OPPO measure page owns the write")
             return

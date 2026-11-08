@@ -1,9 +1,11 @@
 package io.github.brucezhang1993.ohealthdevicebridge.hook.oppo
 
+import android.app.Activity
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
+import java.io.File
 
 /**
  * Drives OPPO's own body-fat measure page with readings from a Mi Body Composition Scale.
@@ -117,6 +119,7 @@ object BodyFatMeasureHook {
                         // Fresh page, fresh profile: the selected member may have changed.
                         userModel = null
                         userModelResolved = false
+                        setMeasurePageOpen((param.thisObject as? Activity)?.applicationContext, true)
                         BridgeLog.i("measure page opened; viewModel captured")
                     }
                 }
@@ -125,6 +128,7 @@ object BodyFatMeasureHook {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     if (viewModel != null) BridgeLog.i("measure page closed")
                     viewModel = null
+                    setMeasurePageOpen((param.thisObject as? Activity)?.applicationContext, false)
                 }
             })
             // 6.10.x only: u6() silently refuses a reading when vm.w/x are not set. Log that
@@ -349,6 +353,29 @@ object BodyFatMeasureHook {
 
     /** True while OPPO's measure page is in the foreground (main process only). */
     fun isMeasuring(): Boolean = viewModel != null
+
+    /**
+     * The recorder runs in :SportDaemonService, a different process, so the `viewModel` static here
+     * is invisible to it. A tiny file flag bridges the gap: the measure page writes it on
+     * onCreate and deletes it on onDestroy, and the recorder checks it before writing, so a page
+     * that owns the write (its own u6 -> l.call) is never double-written by the background loop.
+     */
+    private const val MEASURE_OPEN_FLAG = "oh_measure_open.flag"
+
+    private fun flagDir(ctx: android.content.Context?): File? {
+        val app = ctx?.applicationContext ?: ctx ?: return null
+        return runCatching { app.getExternalFilesDir(null) }.getOrNull() ?: app.filesDir
+    }
+
+    fun setMeasurePageOpen(ctx: android.content.Context?, open: Boolean) {
+        val dir = flagDir(ctx) ?: return
+        runCatching { if (open) File(dir, MEASURE_OPEN_FLAG).writeText("1") else File(dir, MEASURE_OPEN_FLAG).delete() }
+    }
+
+    fun isMeasurePageOpen(ctx: android.content.Context?): Boolean {
+        val dir = flagDir(ctx) ?: return false
+        return File(dir, MEASURE_OPEN_FLAG).exists()
+    }
 
     /** Listens for readings broadcast by the daemon process and renders them on the page. */
     private fun registerReceiver(cl: ClassLoader, appContext: android.content.Context?) {
