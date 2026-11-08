@@ -179,6 +179,7 @@ object BodyFatMeasureHook {
                         val heightCm = when {
                             raw in 50f..250f -> raw          // already in cm
                             raw in 1f..2.5f -> raw * 100f     // metres -> cm
+                            raw in 500f..2500f -> raw / 10f   // millimetres -> cm (OPPO stores height in mm)
                             else -> FALLBACK_HEIGHT_CM
                         }
                         val fixed = rebuildG0(g0, heightCm)
@@ -628,8 +629,14 @@ object BodyFatMeasureHook {
     private fun memberHeight(member: Any?): Float = runCatching {
         val raw = member?.javaClass?.getMethod("getHeight")?.invoke(member) as? String
         val cm = raw?.trim()?.toFloatOrNull() ?: return FALLBACK_HEIGHT_CM
-        // Stored as cm; guard against metres so the algorithm is not fed a 1.7 cm body.
-        if (cm in 50f..250f) cm else if (cm in 1f..2.5f) cm * 100f else FALLBACK_HEIGHT_CM
+        // FamilyMemberInfo.height is stored in millimetres (1730 == 173 cm); also guard against
+        // metres so the algorithm is never fed a 1.7 cm body.
+        when {
+            cm in 50f..250f -> cm
+            cm in 1f..2.5f -> cm * 100f
+            cm in 500f..2500f -> cm / 10f
+            else -> FALLBACK_HEIGHT_CM
+        }
     }.getOrDefault(FALLBACK_HEIGHT_CM)
 
     private fun memberSex(cl: ClassLoader, member: Any?): Any? = runCatching {
