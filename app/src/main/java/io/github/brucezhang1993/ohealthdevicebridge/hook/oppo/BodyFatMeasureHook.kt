@@ -316,6 +316,9 @@ object BodyFatMeasureHook {
                         val waterFraction = water / 100.0
                         val boneRateFraction = (bone / w).coerceIn(0.01, 0.2)
                         val fatMass = w * bfFraction
+                        // Obesity degree vs the standard weight for the height (BMI 22).
+                        val standardKg = (height / 100.0) * (height / 100.0) * 22.0
+                        val obesityFraction = ((w - standardKg) / standardKg).coerceIn(-0.5, 1.0)
 
                         if (bmi <= 0f) model.javaClass.getField("bmi").setFloat(model, bmiCalc.toFloat())
                         if (bodyfat <= 0f) model.javaClass.getField("bodyfat").setFloat(model, bfFraction.toFloat())
@@ -329,6 +332,10 @@ object BodyFatMeasureHook {
                         setDouble(model, "muscle_rate", muscleRateFraction) // fraction
                         setDouble(model, "visfat", visfat)                  // level
                         setDouble(model, "protein", 0.16)                   // protein rate fraction
+                        setDouble(model, "subfat", bfFraction * 0.85)       // subcutaneous fat rate ≈ 0.85 × body fat
+                        setDouble(model, "skeletal_muscle_mass", muscle * 0.55) // skeletal muscle ≈ 55% of muscle
+                        setDouble(model, "sinew", muscle * 0.45)            // remaining lean (tendon/water) mass
+                        setFloat(model, "obesity", obesityFraction.toFloat()) // (w - standard) / standard
                         setInt(model, "bmr", bmr)
                         setInt(model, "bodyage", age)
                         BridgeLog.i(
