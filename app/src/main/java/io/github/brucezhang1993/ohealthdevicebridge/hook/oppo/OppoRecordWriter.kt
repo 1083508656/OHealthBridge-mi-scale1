@@ -56,7 +56,7 @@ object OppoRecordWriter {
         return runCatching {
             val ssoid = ssoid(cl)
             val ownerTag = ownerTagId(cl) ?: ssoid
-            BridgeLog.i("WRITE start w=${weightKg} r=$resistanceOhm ssoid=[$ssoid] ownerTag=[$ownerTag]")
+            BridgeLog.i("WRITE start w=${weightKg} r=$resistanceOhm owner=${if (ownerTag.isNullOrBlank()) "none" else "set"}")
 
             val modelCls = cl.loadClass("com.boohee.scale_sdk.data.BHScaleModel")
             val model = modelCls.getDeclaredConstructor().newInstance()
