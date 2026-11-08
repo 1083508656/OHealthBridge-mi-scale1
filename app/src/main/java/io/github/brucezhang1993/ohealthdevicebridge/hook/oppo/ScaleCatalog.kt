@@ -27,6 +27,7 @@ object ScaleCatalog {
         Spec(XiaomiModels.V1, "小米体重秤（一代）", "支持小米体重秤一代"),
         Spec(XiaomiModels.V2, "小米体脂秤（二代）", "支持小米体脂秤二代"),
         Spec(BridgeConstants.AFU_MODEL, "薄荷健康B1体脂秤", "支持薄荷健康B1"),
+        Spec(BridgeConstants.YODA_MODEL, BridgeConstants.YODA_DISPLAY_NAME, "支持京东健康 LEN-1001（广播直连）"),
     )
 
     @Volatile private var cache: List<Spec>? = null

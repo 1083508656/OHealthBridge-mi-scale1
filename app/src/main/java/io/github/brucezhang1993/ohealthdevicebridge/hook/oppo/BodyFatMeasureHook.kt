@@ -253,6 +253,18 @@ object BodyFatMeasureHook {
                         val isMale = sexObj == null || !sexObj.toString().contains("Female")
                         val impedance = model.javaClass.getField("bodyResistance").getFloat(model).toDouble()
 
+                        // No valid BIA reading (socks / poor electrode contact / stepped off too
+                        // early). BMI needs no impedance, but body fat does: running holtek with
+                        // 0 ohm drops the -imp*0.0068 term, inflates LBM and produces a far too
+                        // low body-fat value. Leave composition at 0 rather than inventing one.
+                        if (impedance <= 0.0) {
+                            if (bmi <= 0f && height > 0f) {
+                                val bmiOnly = weight / (((height * height) / 100.0) / 100.0)
+                                model.javaClass.getField("bmi").setFloat(model, bmiOnly.toFloat())
+                            }
+                            return
+                        }
+
                         // Xiaomi / Zepp Life (holtek) body-composition formulas, reverse-engineered
                         // from the official JNI. These use the single-frequency impedance directly,
                         // which is exactly the scale's own calibration.
