@@ -141,10 +141,72 @@ object BodyFatMeasureHook {
                     }
                 })
             }
+            installG0HeightFix(cl)
             registerReceiver(cl, appContext)
             BridgeLog.i("measure hook installed on BodyFatMeasureActivity")
         }.onFailure { BridgeLog.e("measure hook failed", it as? Exception) }
     }
+
+    /**
+     * `utils.h0.a(...)` builds the profile (g0) that the native write path feeds into the body-fat
+     * algorithm. Its `f` field is the height in centimetres; it comes from `AccountUserInfo.height`,
+     * which is momentarily empty while the account profile is still loading. When that happens the
+     * profile gets height = 0 and the algorithm returns bodyfat = 0.0 / bmi = 0.0 (confirmed in the
+     * `recalculateHistory` log). Rebuild the immutable g0 with the height from the bound member's
+     * `FamilyMemberInfo` row instead, so every caller of `h0.a` (both `l.call()` and our write
+     * path) keeps a valid height.
+     */
+    private fun installG0HeightFix(cl: ClassLoader) {
+        if (profile != OppoVersionProfile.V610) return
+        runCatching {
+            val helper = cl.loadClass(PROFILE_HELPER)
+            XposedBridge.hookAllMethods(helper, "a", object : XC_MethodHook() {
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    val g0 = param.result ?: return
+                    runCatching {
+                        val fField = g0.javaClass.getField("f")
+                        if (fField.getFloat(g0) > 0f) return
+                        val member = param.args.getOrNull(1)
+                        val memberH = runCatching {
+                            member?.javaClass?.getMethod("getHeight")?.invoke(member) as? String
+                        }.getOrNull()
+                        val raw = memberH?.trim()?.toFloatOrNull() ?: FALLBACK_HEIGHT_CM
+                        val heightCm = when {
+                            raw in 50f..250f -> raw          // already in cm
+                            raw in 1f..2.5f -> raw * 100f     // metres -> cm
+                            else -> FALLBACK_HEIGHT_CM
+                        }
+                        val fixed = rebuildG0(g0, heightCm)
+                        if (fixed != null) {
+                            param.result = fixed
+                            BridgeLog.i("g0 height fixed to %.0f cm".format(heightCm))
+                        }
+                    }.onFailure { BridgeLog.e("g0 height fix failed", it as? Exception) }
+                }
+            })
+            BridgeLog.i("g0 height fix hook installed")
+        }.onFailure { BridgeLog.e("g0 height fix hook failed", it as? Exception) }
+    }
+
+    /** Rebuilds an immutable g0 with a new `f` (height, metres). */
+    private fun rebuildG0(g0: Any, heightMeters: Float): Any? = runCatching {
+        val c = g0.javaClass
+        val ctor = c.getConstructor(
+            String::class.java, String::class.java, Boolean::class.javaPrimitiveType,
+            java.lang.Boolean::class.java, Int::class.javaPrimitiveType,
+            Float::class.javaPrimitiveType, Float::class.javaPrimitiveType, String::class.java
+        )
+        ctor.newInstance(
+            c.getField("a").get(g0),
+            c.getField("b").get(g0),
+            c.getField("c").getBoolean(g0),
+            c.getField("d").get(g0),
+            c.getField("e").getInt(g0),
+            heightMeters,
+            c.getField("g").getFloat(g0),
+            c.getField("h").get(g0),
+        )
+    }.getOrNull()
 
     /** True while OPPO's measure page is in the foreground (main process only). */
     fun isMeasuring(): Boolean = viewModel != null

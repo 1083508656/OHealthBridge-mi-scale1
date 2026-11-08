@@ -67,7 +67,9 @@ enum class OppoVersionProfile(
         measureValueClass = "com.heytap.device.ui.weight.n",
         valueHasStable = true,
         unclaimedDeleteMethod = "u",
-        unclaimedListField = "l",
+        // k = fetchWeightBodyFatList() result (the actual unclaimed rows); l is the family
+        // member picker list (BodyFatFamilySelectBean), which is NOT what we want to clear.
+        unclaimedListField = "k",
     ),
 
     /** 6.9.37 — readable names, no settle guard, MeasureEvent carries the locked flag. */
