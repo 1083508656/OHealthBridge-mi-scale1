@@ -16,10 +16,11 @@ package io.github.brucezhang1993.ohealthdevicebridge.device.yoda
  * - `seq` increments once per weighing session (observed A6 -> A7 -> A8 -> A9), so it doubles
  *   as the dedup key: the scale keeps re-advertising the last result for tens of seconds.
  * - `weight` is big-endian centi-kg (0x201C = 8220 = 82.20 kg).
- * - `resistance` is big-endian deci-ohm (0x1388 = 5000 = 500.0 ohm). Zero means the scale did
- *   not get a valid impedance reading (socks / poor electrode contact / stepped off too early).
- *   Verified against two weighings: 18:22 and 18:23 carried 5000, 18:31 carried 0 while the
- *   weight stayed identical.
+ * - `resistance` is a big-endian resistance field (0x1388 = 5000, decoded as 500 ohm by the
+ *   current protocol mapping). Zero means the scale did not provide a valid impedance reading.
+ *   This field is not proof that every locked frame contains a human-body impedance: observed
+ *   frames include both 5000 and 0 for the same scale. When it is zero, the bridge stores weight
+ *   only and does not calculate body composition.
  * - `status` 0x25 = locked (settled) frame, 0x24 = weight-not-locked frame (all data zero).
  * - `MAC` is the scale's own public address in normal (non-reversed) order.
  */
