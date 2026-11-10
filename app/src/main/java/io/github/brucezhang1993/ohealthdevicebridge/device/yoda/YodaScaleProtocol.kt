@@ -53,8 +53,9 @@ object YodaScaleProtocol {
         val weightKg = weightRaw / 100.0
         if (weightKg < MIN_PLAUSIBLE_KG || weightKg > MAX_PLAUSIBLE_KG) return null
 
-        // An unlocked frame carries all-zero data; never treat it as a measurement.
-        if (!locked && weightRaw == 0 && resistanceRaw == 0) return null
+        // Only the settled status represents a completed measurement. Ignore intermediate frames
+        // even if firmware leaves provisional weight or impedance values in them.
+        if (!locked) return null
 
         // 5000 deci-ohm = 500 ohm. Anything above 1000 ohm after scaling is implausible for a
         // whole-body BIA reading, so it is discarded rather than fed into the body-fat algorithm.

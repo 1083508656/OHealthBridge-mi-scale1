@@ -75,7 +75,7 @@ object YodaScaleDriver : DeviceDriver {
         YodaBleScan().start(
             context, mac, 30_000L,
             { scan, frame ->
-                if (done) return@start
+                if (done || !frame.locked) return@start
                 latest = scan.device.address to frame
                 done = true
                 onSuccess()
