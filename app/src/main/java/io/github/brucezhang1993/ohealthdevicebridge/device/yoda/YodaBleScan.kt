@@ -9,6 +9,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -21,6 +22,10 @@ import java.util.concurrent.atomic.AtomicReference
  * are actually a session counter, not a real company ID, so they have to be reassembled here.
  */
 internal class YodaBleScan {
+    /** Throttle state for the raw-frame diagnostic dump. */
+    @Volatile private var lastRawHex = ""
+    @Volatile private var lastRawAt = 0L
+
     @SuppressLint("MissingPermission")
     fun start(
         context: Context,
@@ -71,7 +76,20 @@ internal class YodaBleScan {
                                     ((cid shr 8) and 0xFF).toByte(),
                                 ) + tail
                                 if (full.size != YodaScaleProtocol.MANUFACTURER_DATA_LEN) continue
-                                val frame = YodaScaleProtocol.parse(full) ?: continue
+                                val frame = YodaScaleProtocol.parse(full)
+                                // Diagnosis: dump the raw AD so a dropped impedance can be told
+                                // apart from one the scale never measured (resistance bytes 0).
+                                val hex = full.joinToString("") { "%02X".format(it) }
+                                if (hex != lastRawHex || System.currentTimeMillis() - lastRawAt > 2_000L) {
+                                    lastRawHex = hex
+                                    lastRawAt = System.currentTimeMillis()
+                                    BridgeLog.i(
+                                        "YODA raw=$hex parsed=" + (frame?.let {
+                                            "w=${it.weightKg} r=${it.resistanceOhm} seq=${it.sequence} locked=${it.locked}"
+                                        } ?: "null")
+                                    )
+                                }
+                                if (frame == null) continue
                                 // The frame embeds its own MAC; require it to match the sender so
                                 // unrelated 0xFF advertisements can never be mistaken for a scale.
                                 if (!frame.mac.equals(scan.device.address, true)) continue

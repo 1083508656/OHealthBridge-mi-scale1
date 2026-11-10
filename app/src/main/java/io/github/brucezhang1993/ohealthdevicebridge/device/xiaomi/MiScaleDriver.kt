@@ -12,6 +12,10 @@ internal class MiScaleDriver(override val model: String) : HistoryDeviceDriver {
     private val sessions = mutableMapOf<String, MiScaleGattSession>()
     private fun key(mac: String) = mac.uppercase(Locale.ROOT)
     private fun label() = XiaomiModels.names[model] ?: model
+    private companion object {
+        /** See MiScaleProtocol: the scale's clock is only loosely tied to wall time. */
+        const val FRESH_TOLERANCE_S = 300L
+    }
     override fun hasSession(mac: String) = sessions.containsKey(key(mac))
     override fun isConnected(mac: String) = sessions[key(mac)]?.connected == true
 
@@ -70,7 +74,9 @@ internal class MiScaleDriver(override val model: String) : HistoryDeviceDriver {
                 // off. Only a frame whose embedded timestamp is recent is a live weighing; a stale
                 // one must not open a GATT link or pull up the measure page.
                 val age = System.currentTimeMillis() / 1000 - reading.record.timestampEpochSeconds
-                val fresh = age in 0..120
+                // The scale's clock has no NTP and only syncs during a GATT session, so a live
+                // frame can sit minutes either side of "now"; allow for that.
+                val fresh = age in -FRESH_TOLERANCE_S..FRESH_TOLERANCE_S
                 BridgeLog.i(
                     "XIAOMI broadcast ${BridgeLog.maskedMac(scan.device.address)} " +
                         "w=${reading.record.weightKg} r=${reading.record.resistanceOhm} stable=${reading.stable} age=${age}s fresh=$fresh"

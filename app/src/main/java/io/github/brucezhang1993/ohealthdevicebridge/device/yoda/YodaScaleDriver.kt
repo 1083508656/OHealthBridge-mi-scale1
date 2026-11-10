@@ -20,7 +20,7 @@ object YodaScaleDriver : DeviceDriver {
     override val model: String = BridgeConstants.YODA_MODEL
 
     @Volatile private var latest: Pair<String, YodaScaleProtocol.Frame>? = null
-    @Volatile private var lastReportedSeq = -1
+    @Volatile private var lastSignature: String? = null
     @Volatile private var lastReportedAt = 0L
 
     /** A session counter wraps at 256; a repeat after this long is treated as a new weighing. */
@@ -44,10 +44,14 @@ object YodaScaleDriver : DeviceDriver {
                 if (!frame.locked) return@start
                 latest = scan.device.address to frame
                 val now = System.currentTimeMillis()
-                if (frame.sequence == lastReportedSeq && now - lastReportedAt < SEQ_DEDUP_MS) {
+                // Dedup on the whole payload, not on seq alone: the scale locks the weight first
+                // and only completes the impedance a moment later, re-advertising the SAME seq.
+                // Keying on seq dropped that second, impedance-bearing frame.
+                val signature = "${frame.sequence}|${frame.weightKg}|${frame.resistanceOhm}"
+                if (signature == lastSignature && now - lastReportedAt < SEQ_DEDUP_MS) {
                     return@start
                 }
-                lastReportedSeq = frame.sequence
+                lastSignature = signature
                 lastReportedAt = now
                 reported = true
                 BridgeLog.i(

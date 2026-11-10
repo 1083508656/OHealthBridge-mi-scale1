@@ -36,6 +36,8 @@ object XiaomiAutoRecord {
     // Long enough to swallow duplicate frames of one weighing, short enough that the next
     // stepping-on is not missed (the old 60s cooldown blocked back-to-back measurements).
     private const val COOLDOWN_MS = 20_000L
+    /** How far a frame's embedded clock may sit from "now" and still count as a live weighing. */
+    private const val FRESH_TOLERANCE_S = 300L
     private val main = Handler(Looper.getMainLooper())
 
     /** Last advertisement frame already handled, so re-advertised stale values are ignored. */
@@ -114,7 +116,10 @@ object XiaomiAutoRecord {
                 // "no one standing on it, but 正在测量 pops up" bug). Only a frame with a recent
                 // embedded timestamp counts as a live weighing.
                 val age = System.currentTimeMillis() / 1000 - rec.timestampEpochSeconds
-                val fresh = age in 0..120
+                // The scale's own clock drifts (it has no NTP and only syncs on a GATT session),
+                // so a live frame can sit minutes away from "now" in either direction. Give it a
+                // symmetric window; a record the scale re-advertises hours later still falls out.
+                val fresh = age in -FRESH_TOLERANCE_S..FRESH_TOLERANCE_S
                 BridgeLog.i("AUTORECORD broadcast w=${rec.weightKg} r=${rec.resistanceOhm} t=${rec.timestampEpochSeconds} age=${age}s fresh=$fresh")
                 if (fresh) {
                     // Pull up OPPO's own "measuring" page so the user sees the live weight, then
@@ -128,7 +133,7 @@ object XiaomiAutoRecord {
                 // scale would send over GATT. Persist it right here so background weighing works
                 // on any OPPO Health page without needing a GATT link (which the scale drops after
                 // ~30s of silence, making the GATT path unreliable).
-                if (rec.resistanceOhm != null && rec.weightKg >= 10.0) {
+                if (rec.weightKg >= 10.0) {
                     persist(cl, ctx, rec, "broadcast")
                 }
             })

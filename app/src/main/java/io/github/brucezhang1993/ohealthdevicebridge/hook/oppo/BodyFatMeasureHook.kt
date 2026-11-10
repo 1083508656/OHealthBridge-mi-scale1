@@ -4,6 +4,7 @@ import android.app.Activity
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
+import io.github.brucezhang1993.ohealthdevicebridge.BridgeConstants
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
 import io.github.brucezhang1993.ohealthdevicebridge.store.ScalePrefs
 import java.io.File
@@ -334,19 +335,19 @@ object BodyFatMeasureHook {
 
                         if (bmi <= 0f) model.javaClass.getField("bmi").setFloat(model, bmiCalc.toFloat())
                         if (bodyfat <= 0f) model.javaClass.getField("bodyfat").setFloat(model, bfFraction.toFloat())
-                        setDouble(model, "fat_free_weight", lbm)            // kg (LBM)
+                        setFloat(model, "fat_free_weight", lbm.toFloat())            // kg (LBM)
                         setFloat(model, "fat_mass", fatMass.toFloat())      // kg (F field)
-                        setDouble(model, "water", waterFraction)            // fraction
-                        setDouble(model, "water_content", waterFraction)    // fraction
-                        setDouble(model, "bone", bone)                      // kg
-                        setDouble(model, "bone_rate", boneRateFraction)     // fraction
-                        setDouble(model, "muscle", muscle)                  // kg
-                        setDouble(model, "muscle_rate", muscleRateFraction) // fraction
-                        setDouble(model, "visfat", visfat)                  // level
-                        setDouble(model, "protein", 0.16)                   // protein rate fraction
-                        setDouble(model, "subfat", bfFraction * 0.85)       // subcutaneous fat rate ≈ 0.85 × body fat
-                        setDouble(model, "skeletal_muscle_mass", muscle * 0.55) // skeletal muscle ≈ 55% of muscle
-                        setDouble(model, "sinew", muscle * 0.45)            // remaining lean (tendon/water) mass
+                        setFloat(model, "water", waterFraction.toFloat())            // fraction
+                        setFloat(model, "water_content", waterFraction.toFloat())    // fraction
+                        setFloat(model, "bone", bone.toFloat())                      // kg
+                        setFloat(model, "bone_rate", boneRateFraction.toFloat())     // fraction
+                        setFloat(model, "muscle", muscle.toFloat())                  // kg
+                        setFloat(model, "muscle_rate", muscleRateFraction.toFloat()) // fraction
+                        setFloat(model, "visfat", visfat.toFloat())                  // level
+                        setFloat(model, "protein", 0.16f)                   // protein rate fraction
+                        setFloat(model, "subfat", (bfFraction * 0.85).toFloat())       // subcutaneous fat rate ≈ 0.85 × body fat
+                        setFloat(model, "skeletal_muscle_mass", (muscle * 0.55).toFloat()) // skeletal muscle ≈ 55% of muscle
+                        setFloat(model, "sinew", (muscle * 0.45).toFloat())            // remaining lean (tendon/water) mass
                         setFloat(model, "obesity", obesityFraction.toFloat()) // (w - standard) / standard
                         setInt(model, "bmr", bmr)
                         setInt(model, "bodyage", age)
@@ -361,12 +362,9 @@ object BodyFatMeasureHook {
         }.onFailure { BridgeLog.e("BIA fix hook failed", it as? Exception) }
     }
 
-    private fun setDouble(target: Any, field: String, value: Double) {
-        runCatching { target.javaClass.getField(field).setDouble(target, value) }
-    }
-
     private fun setFloat(target: Any, field: String, value: Float) {
         runCatching { target.javaClass.getField(field).setFloat(target, value) }
+            .onFailure { BridgeLog.e("BIA field write failed: $field", it as? Exception) }
     }
 
     /**
@@ -387,8 +385,9 @@ object BodyFatMeasureHook {
                         val ctx = appContext ?: OppoReflect.context() ?: return
                         val binding = ScalePrefs.load(ctx) ?: return
                         if (binding.mac.equals(mac, ignoreCase = true)) {
+                            val label = if (binding.model == BridgeConstants.YODA_MODEL) "LEN-1001 体脂秤" else "小米体脂秤"
                             record.javaClass.getMethod("setDeviceName", String::class.java)
-                                .invoke(record, "小米体脂秤")
+                                .invoke(record, label)
                         }
                     }.onFailure { BridgeLog.e("device name fix failed", it as? Exception) }
                 }

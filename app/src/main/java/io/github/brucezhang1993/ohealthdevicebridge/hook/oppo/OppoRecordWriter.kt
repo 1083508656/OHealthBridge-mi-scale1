@@ -1,7 +1,9 @@
 package io.github.brucezhang1993.ohealthdevicebridge.hook.oppo
 
 import android.content.Context
+import io.github.brucezhang1993.ohealthdevicebridge.BridgeConstants
 import io.github.brucezhang1993.ohealthdevicebridge.BridgeLog
+import io.github.brucezhang1993.ohealthdevicebridge.store.ScalePrefs
 
 /**
  * Writes a measurement (weight + resistance) into OPPO Health's body-fat store.
@@ -43,7 +45,7 @@ object OppoRecordWriter {
         val saverCls = cl.loadClass("com.heytap.device.ui.weight.scale.boohee.BooheeWeightSaver")
         val saver = saverCls.getField("INSTANCE").get(null)
         val tag = ssoid(cl)
-        BridgeLog.i("WRITE V69 saveLockedMeasure tag=[$tag]")
+        BridgeLog.i("WRITE V69 saveLockedMeasure tag=${if (tag.isNullOrBlank()) "none" else "set"}")
         val record = saverCls.getMethod(
             "saveLockedMeasure", modelCls,
             Double::class.javaPrimitiveType, String::class.java, String::class.java
@@ -83,8 +85,8 @@ object OppoRecordWriter {
             if (record == null) { BridgeLog.e("WRITE record null"); return false }
             // i0.d names the source from the bound device record (or the owner tag), which shows up
             // as "薄荷健康体脂秤" on the result page. Override it so the row says where it really
-            // came from.
-            runCatching { record.javaClass.getMethod("setDeviceName", String::class.java).invoke(record, "小米体脂秤") }
+            // came from — and follow whichever scale is actually bound.
+            runCatching { record.javaClass.getMethod("setDeviceName", String::class.java).invoke(record, deviceLabel(ctx)) }
 
             val normalized = if (ssoid.isNullOrBlank()) record else runCatching {
                 val impl = cl.loadClass("com.heytap.device.manager.WeightScaleServiceImpl").getDeclaredConstructor().newInstance()
@@ -117,6 +119,12 @@ object OppoRecordWriter {
         val holder = cl.loadClass("lc0.d").getMethod("h").invoke(null)
         holder.javaClass.getMethod("getSsoid").invoke(holder) as? String
     }.getOrNull()
+
+    /** Device name shown on the result page; follows whichever scale is currently bound. */
+    private fun deviceLabel(ctx: Context): String {
+        val model = runCatching { ScalePrefs.load(ctx)?.model }.getOrNull()
+        return if (model == BridgeConstants.YODA_MODEL) "LEN-1001 体脂秤" else "小米体脂秤"
+    }
 
     /**
      * The account owner's userTagId (`utils.h0.i()` = `le.a(ssoid)`). `i0.d` uses its 4th

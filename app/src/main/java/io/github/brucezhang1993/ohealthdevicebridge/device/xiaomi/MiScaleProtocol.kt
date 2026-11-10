@@ -4,7 +4,9 @@ import io.github.brucezhang1993.ohealthdevicebridge.device.MeasurementRecord
 import java.time.DateTimeException
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.Calendar
+import kotlin.math.abs
 
 internal object MiScaleProtocol {
     data class Reading(val record: MeasurementRecord, val stable: Boolean, val removed: Boolean, val dated: Boolean)
@@ -22,7 +24,17 @@ internal object MiScaleProtocol {
         val d = if (v2) 2 else 3
         val dated = try {
             val year = u16(data, d)
-            if (year !in 2000..2100) null else LocalDateTime.of(year, u(d + 2), u(d + 3), u(d + 4), u(d + 5), u(d + 6)).atZone(ZoneId.systemDefault()).toEpochSecond()
+            if (year !in 2000..2100) null else {
+                val wall = LocalDateTime.of(year, u(d + 2), u(d + 3), u(d + 4), u(d + 5), u(d + 6))
+                // The scale keeps its own clock on UTC while the phone runs on local time, so
+                // reading the same wall clock in the phone's zone lands exactly +8 h in the past
+                // (and the mirror image in any other offset). Take whichever interpretation sits
+                // closer to "now": a live weighing then reads as fresh either way, and a record
+                // the scale re-advertises hours later still reads as old.
+                val asLocal = wall.atZone(ZoneId.systemDefault()).toEpochSecond()
+                val asUtc = wall.toEpochSecond(ZoneOffset.UTC)
+                if (abs(now - asUtc) <= abs(now - asLocal)) asUtc else asLocal
+            }
         } catch (_: DateTimeException) { null }
         val resistance = if (v2 && flags and 2 != 0) u16(data, 9).takeIf { it in 1..2000 } else null
         return Reading(MeasurementRecord(dated ?: now, kg, resistance), flags and 0x20 != 0, flags and 0x80 != 0, dated != null)

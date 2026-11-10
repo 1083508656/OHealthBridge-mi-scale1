@@ -36,7 +36,7 @@ object DeviceInjector {
             runCatching { c.javaClass.getMethod("close").invoke(c) }
             has
         }.getOrDefault(false)
-        if (exists) { BridgeLog.i("BIND already present mac=$mac"); return true }
+        if (exists) { BridgeLog.i("BIND already present mac=${BridgeLog.maskedMac(mac)}"); return true }
 
         val info = ContentValues().apply {
             put("device_name", DEVICE_NAME)
@@ -50,7 +50,7 @@ object DeviceInjector {
             put("sync_status", 0)
         }
         val r1 = insert(db, TABLE_INFO, info)
-        BridgeLog.i("BIND DBDeviceInfo row=$r1 name=$DEVICE_NAME type=$deviceType mac=$mac")
+        BridgeLog.i("BIND DBDeviceInfo row=$r1 name=$DEVICE_NAME type=$deviceType mac=${BridgeLog.maskedMac(mac)}")
 
         val bound = ContentValues().apply {
             put("ssoid", ssoid)
@@ -63,7 +63,7 @@ object DeviceInjector {
             put("create_time", now)
         }
         val r2 = insert(db, TABLE_BOUND, bound)
-        BridgeLog.i("BIND DBUserBoundDevice row=$r2 ssoid=$ssoid")
+        BridgeLog.i("BIND DBUserBoundDevice row=$r2 ssoid=${if (ssoid.isNullOrBlank()) "none" else "set"}")
 
         (r1 != -1L) && (r2 != -1L)
     }.onFailure { BridgeLog.e("BIND failed", it as? Exception) }.getOrDefault(false)
